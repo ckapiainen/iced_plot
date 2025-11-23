@@ -23,7 +23,7 @@ impl VLine {
             label: None,
             color: Color::from_rgb(0.5, 0.5, 0.5),
             width: 1.0,
-            line_style: LineStyle::Solid,
+            line_style: LineStyle::Solid { width: 1.0 },
         }
     }
 
@@ -78,7 +78,7 @@ impl HLine {
             label: None,
             color: Color::from_rgb(0.5, 0.5, 0.5),
             width: 1.0,
-            line_style: LineStyle::Solid,
+            line_style: LineStyle::Solid { width: 1.0 },
         }
     }
 

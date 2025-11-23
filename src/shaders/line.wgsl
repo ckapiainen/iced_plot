@@ -12,6 +12,7 @@ struct VsIn {
     @location(2) line_style: u32, // 0=solid, 1=dotted, 2=dashed
     @location(3) distance_along_line: f32, // cumulative distance along the line
     @location(4) style_param: f32, // spacing for dotted, length for dashed
+    @location(5) width: f32, // line width in pixels
 };
 
 struct VsOut {
@@ -20,6 +21,7 @@ struct VsOut {
     @location(1) line_style: u32,
     @location(2) distance_along_line: f32,
     @location(3) style_param: f32,
+    @location(4) width: f32,
 };
 
 @vertex
@@ -30,6 +32,7 @@ fn vs_main(in: VsIn) -> VsOut {
     out.line_style = in.line_style;
     out.distance_along_line = in.distance_along_line;
     out.style_param = in.style_param;
+    out.width = in.width;
     return out;
 }
 

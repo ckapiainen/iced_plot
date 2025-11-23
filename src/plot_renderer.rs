@@ -131,12 +131,14 @@ impl VertexWriter {
         style: u32,
         distance: f32,
         param: f32,
+        width: f32,
     ) {
         self.write_position(pos);
         self.write_color(color);
         self.write_u32(style);
         self.write_f32(distance);
         self.write_f32(param);
+        self.write_f32(width);
     }
 
     fn len(&self) -> usize {
@@ -452,7 +454,7 @@ impl PlotRenderer {
                 entry_point: Some("vs_main"),
                 compilation_options: PipelineCompilationOptions::default(),
                 buffers: &[VertexBufferLayout {
-                    array_stride: 36, // vec2<f32> position (8) + vec4<f32> color (16) + u32 line_style (4) + f32 distance (4) + f32 style_param (4)
+                    array_stride: 40, // vec2<f32> position (8) + vec4<f32> color (16) + u32 line_style (4) + f32 distance (4) + f32 style_param (4) + f32 width (4)
                     step_mode: VertexStepMode::Vertex,
                     attributes: &[
                         VertexAttribute {
@@ -480,6 +482,11 @@ impl PlotRenderer {
                             shader_location: 4,
                             format: VertexFormat::Float32, // style_param
                         },
+                        VertexAttribute {
+                            offset: 36,
+                            shader_location: 5,
+                            format: VertexFormat::Float32, // width
+                        },
                     ],
                 }],
             },
@@ -494,7 +501,7 @@ impl PlotRenderer {
                 })],
             }),
             primitive: PrimitiveState {
-                topology: PrimitiveTopology::LineStrip,
+                topology: PrimitiveTopology::TriangleList,
                 strip_index_format: None,
                 front_face: FrontFace::Ccw,
                 cull_mode: None,
@@ -709,6 +716,10 @@ impl PlotRenderer {
             return;
         }
 
+        // Calculate world units per pixel for width conversion
+        let viewport_width = state.bounds.width.max(1.0);
+        let pixel_to_world_x = (2.0 * state.camera.half_extents.x as f32) / viewport_width;
+
         let mut writer = VertexWriter::new();
         let mut segs: Vec<LineSegment> = Vec::new();
 
@@ -716,32 +727,109 @@ impl PlotRenderer {
             if s.line_style.is_none() || s.len < 2 {
                 continue;
             }
-            let first = (writer.len() / 36) as u32; // 36 bytes per vertex
-            let (line_style_u32, style_param) = line_style_params(s.line_style.unwrap());
+            let first = (writer.len() / 40) as u32; // 40 bytes per vertex
+            let (line_style_u32, style_param, width) = line_style_params(s.line_style.unwrap());
 
             let points_slice = &state.points[s.start..s.start + s.len];
             let mut cumulative_distance = 0.0f32;
 
-            for (i, p) in points_slice.iter().enumerate() {
-                if i > 0 {
-                    let prev = &points_slice[i - 1];
-                    let dx = p.position[0] - prev.position[0];
-                    let dy = p.position[1] - prev.position[1];
-                    cumulative_distance += (dx * dx + dy * dy).sqrt() as f32;
+            // Generate quads for each line segment
+            for i in 0..(points_slice.len() - 1) {
+                let p0 = &points_slice[i];
+                let p1 = &points_slice[i + 1];
+
+                // Calculate direction vector
+                let dx = (p1.position[0] - p0.position[0]) as f32;
+                let dy = (p1.position[1] - p0.position[1]) as f32;
+                let segment_len = (dx * dx + dy * dy).sqrt();
+
+                if segment_len < 1e-6 {
+                    continue; // Skip degenerate segments
                 }
 
-                let render_pos = self.world_to_render_pos(p.position, &state.camera);
+                // Normalize direction and calculate perpendicular (rotate 90 degrees)
+                let dir_x = dx / segment_len;
+                let dir_y = dy / segment_len;
+                let perp_x = -dir_y;
+                let perp_y = dir_x;
+
+                // Convert width from logical pixels to world coordinates
+                let width_world = width * pixel_to_world_x;
+                let half_width = width_world * 0.5;
+
+                // Offset corners in world space before rendering
+                let p0_world = p0.position;
+                let p1_world = p1.position;
+
+                let corner0 = [p0_world[0] - perp_x as f64 * half_width as f64,
+                               p0_world[1] - perp_y as f64 * half_width as f64];
+                let corner1 = [p0_world[0] + perp_x as f64 * half_width as f64,
+                               p0_world[1] + perp_y as f64 * half_width as f64];
+                let corner2 = [p1_world[0] - perp_x as f64 * half_width as f64,
+                               p1_world[1] - perp_y as f64 * half_width as f64];
+                let corner3 = [p1_world[0] + perp_x as f64 * half_width as f64,
+                               p1_world[1] + perp_y as f64 * half_width as f64];
+
+                let dist0 = cumulative_distance;
+                cumulative_distance += segment_len;
+                let dist1 = cumulative_distance;
+
+                // Generate two triangles (6 vertices) for the quad
+                // Triangle 1: corner0, corner1, corner2
                 writer.write_line_vertex(
-                    render_pos,
+                    self.world_to_render_pos(corner0, &state.camera),
                     &s.color,
                     line_style_u32,
-                    cumulative_distance,
+                    dist0,
                     style_param,
+                    width,
+                );
+                writer.write_line_vertex(
+                    self.world_to_render_pos(corner1, &state.camera),
+                    &s.color,
+                    line_style_u32,
+                    dist0,
+                    style_param,
+                    width,
+                );
+                writer.write_line_vertex(
+                    self.world_to_render_pos(corner2, &state.camera),
+                    &s.color,
+                    line_style_u32,
+                    dist1,
+                    style_param,
+                    width,
+                );
+
+                // Triangle 2: corner1, corner3, corner2
+                writer.write_line_vertex(
+                    self.world_to_render_pos(corner1, &state.camera),
+                    &s.color,
+                    line_style_u32,
+                    dist0,
+                    style_param,
+                    width,
+                );
+                writer.write_line_vertex(
+                    self.world_to_render_pos(corner3, &state.camera),
+                    &s.color,
+                    line_style_u32,
+                    dist1,
+                    style_param,
+                    width,
+                );
+                writer.write_line_vertex(
+                    self.world_to_render_pos(corner2, &state.camera),
+                    &s.color,
+                    line_style_u32,
+                    dist1,
+                    style_param,
+                    width,
                 );
             }
 
-            let count = (writer.len() / 36) as u32 - first;
-            if count >= 2 {
+            let count = (writer.len() / 40) as u32 - first;
+            if count >= 6 {
                 segs.push(LineSegment {
                     first_vertex: first,
                     vertex_count: count,
@@ -776,6 +864,10 @@ impl PlotRenderer {
             return;
         }
 
+        // Calculate world units per pixel for width conversion
+        let viewport_width = state.bounds.width.max(1.0);
+        let pixel_to_world_x = (2.0 * state.camera.half_extents.x as f32) / viewport_width;
+
         let mut writer = VertexWriter::new();
         let mut segs: Vec<LineSegment> = Vec::new();
 
@@ -793,25 +885,81 @@ impl PlotRenderer {
                 continue;
             }
 
-            let first = (writer.len() / 36) as u32;
-            let (line_style_u32, style_param) = line_style_params(vline.line_style);
+            let first = (writer.len() / 40) as u32;
+            let (line_style_u32, style_param, _) = line_style_params(vline.line_style);
 
-            // Create two vertices: bottom and top of viewport
-            for (idx, y) in [bottom, top].iter().enumerate() {
-                let render_pos = self.world_to_render_pos([vline.x, *y], &state.camera);
-                let distance = if idx == 0 { 0.0 } else { (top - bottom) as f32 };
-                writer.write_line_vertex(
-                    render_pos,
-                    &vline.color,
-                    line_style_u32,
-                    distance,
-                    style_param,
-                );
-            }
+            // Convert width from logical pixels to world coordinates
+            let width_world = vline.width * pixel_to_world_x;
+            let half_width = width_world * 0.5;
+
+            // Create quad for vertical line
+            let x0 = vline.x - half_width as f64;
+            let x1 = vline.x + half_width as f64;
+            let y0 = bottom;
+            let y1 = top;
+            let line_length = (y1 - y0) as f32;
+
+            // Generate quad (two triangles, 6 vertices)
+            let corner0 = [x0, y0];
+            let corner1 = [x1, y0];
+            let corner2 = [x0, y1];
+            let corner3 = [x1, y1];
+
+            // Triangle 1: bottom-left, bottom-right, top-left
+            writer.write_line_vertex(
+                self.world_to_render_pos(corner0, &state.camera),
+                &vline.color,
+                line_style_u32,
+                0.0,
+                style_param,
+                vline.width,
+            );
+            writer.write_line_vertex(
+                self.world_to_render_pos(corner1, &state.camera),
+                &vline.color,
+                line_style_u32,
+                0.0,
+                style_param,
+                vline.width,
+            );
+            writer.write_line_vertex(
+                self.world_to_render_pos(corner2, &state.camera),
+                &vline.color,
+                line_style_u32,
+                line_length,
+                style_param,
+                vline.width,
+            );
+
+            // Triangle 2: bottom-right, top-right, top-left
+            writer.write_line_vertex(
+                self.world_to_render_pos(corner1, &state.camera),
+                &vline.color,
+                line_style_u32,
+                0.0,
+                style_param,
+                vline.width,
+            );
+            writer.write_line_vertex(
+                self.world_to_render_pos(corner3, &state.camera),
+                &vline.color,
+                line_style_u32,
+                line_length,
+                style_param,
+                vline.width,
+            );
+            writer.write_line_vertex(
+                self.world_to_render_pos(corner2, &state.camera),
+                &vline.color,
+                line_style_u32,
+                line_length,
+                style_param,
+                vline.width,
+            );
 
             segs.push(LineSegment {
                 first_vertex: first,
-                vertex_count: 2,
+                vertex_count: 6,
             });
         }
 
@@ -822,25 +970,81 @@ impl PlotRenderer {
                 continue;
             }
 
-            let first = (writer.len() / 36) as u32;
-            let (line_style_u32, style_param) = line_style_params(hline.line_style);
+            let first = (writer.len() / 40) as u32;
+            let (line_style_u32, style_param, _) = line_style_params(hline.line_style);
 
-            // Create two vertices: left and right of viewport
-            for (idx, x) in [left, right].iter().enumerate() {
-                let render_pos = self.world_to_render_pos([*x, hline.y], &state.camera);
-                let distance = if idx == 0 { 0.0 } else { (right - left) as f32 };
-                writer.write_line_vertex(
-                    render_pos,
-                    &hline.color,
-                    line_style_u32,
-                    distance,
-                    style_param,
-                );
-            }
+            // Convert width from logical pixels to world coordinates
+            let width_world = hline.width * pixel_to_world_x;
+            let half_width = width_world * 0.5;
+
+            // Create quad for horizontal line
+            let x0 = left;
+            let x1 = right;
+            let y0 = hline.y - half_width as f64;
+            let y1 = hline.y + half_width as f64;
+            let line_length = (x1 - x0) as f32;
+
+            // Generate quad (two triangles, 6 vertices)
+            let corner0 = [x0, y0];
+            let corner1 = [x1, y0];
+            let corner2 = [x0, y1];
+            let corner3 = [x1, y1];
+
+            // Triangle 1: left-bottom, right-bottom, left-top
+            writer.write_line_vertex(
+                self.world_to_render_pos(corner0, &state.camera),
+                &hline.color,
+                line_style_u32,
+                0.0,
+                style_param,
+                hline.width,
+            );
+            writer.write_line_vertex(
+                self.world_to_render_pos(corner1, &state.camera),
+                &hline.color,
+                line_style_u32,
+                line_length,
+                style_param,
+                hline.width,
+            );
+            writer.write_line_vertex(
+                self.world_to_render_pos(corner2, &state.camera),
+                &hline.color,
+                line_style_u32,
+                0.0,
+                style_param,
+                hline.width,
+            );
+
+            // Triangle 2: right-bottom, right-top, left-top
+            writer.write_line_vertex(
+                self.world_to_render_pos(corner1, &state.camera),
+                &hline.color,
+                line_style_u32,
+                line_length,
+                style_param,
+                hline.width,
+            );
+            writer.write_line_vertex(
+                self.world_to_render_pos(corner3, &state.camera),
+                &hline.color,
+                line_style_u32,
+                line_length,
+                style_param,
+                hline.width,
+            );
+            writer.write_line_vertex(
+                self.world_to_render_pos(corner2, &state.camera),
+                &hline.color,
+                line_style_u32,
+                0.0,
+                style_param,
+                hline.width,
+            );
 
             segs.push(LineSegment {
                 first_vertex: first,
-                vertex_count: 2,
+                vertex_count: 6,
             });
         }
 
@@ -1156,11 +1360,11 @@ impl PlotRenderer {
     }
 }
 
-// Helper to extract line style parameters
-fn line_style_params(style: LineStyle) -> (u32, f32) {
+// Helper to extract line style parameters (style_type, style_param, width)
+fn line_style_params(style: LineStyle) -> (u32, f32, f32) {
     match style {
-        LineStyle::Solid => (0u32, 0.0f32),
-        LineStyle::Dotted { spacing } => (1u32, spacing),
-        LineStyle::Dashed { length } => (2u32, length),
+        LineStyle::Solid { width } => (0u32, 0.0f32, width),
+        LineStyle::Dotted { spacing, width } => (1u32, spacing, width),
+        LineStyle::Dashed { length, width } => (2u32, length, width),
     }
 }

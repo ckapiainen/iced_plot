@@ -6,11 +6,11 @@ use crate::{Color, point::MarkerType};
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LineStyle {
     /// Solid continuous line.
-    Solid,
+    Solid { width: f32 },
     /// Dotted line with configurable spacing.
-    Dotted { spacing: f32 },
+    Dotted { spacing: f32, width: f32 },
     /// Dashed line with configurable dash length.
-    Dashed { length: f32 },
+    Dashed { length: f32, width: f32 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -190,19 +190,34 @@ impl Series {
         self
     }
 
-    /// Set solid line style.
+    /// Set solid line style with default width.
     pub fn line_solid(self) -> Self {
-        self.line_style(LineStyle::Solid)
+        self.line_style(LineStyle::Solid { width: 1.0 })
     }
 
-    /// Set dotted line style with given spacing.
+    /// Set solid line style with custom width.
+    pub fn line_solid_width(self, width: f32) -> Self {
+        self.line_style(LineStyle::Solid { width })
+    }
+
+    /// Set dotted line style with given spacing and default width.
     pub fn line_dotted(self, spacing: f32) -> Self {
-        self.line_style(LineStyle::Dotted { spacing })
+        self.line_style(LineStyle::Dotted { spacing, width: 1.0 })
     }
 
-    /// Set dashed line style with given dash length.
+    /// Set dotted line style with given spacing and custom width.
+    pub fn line_dotted_width(self, spacing: f32, width: f32) -> Self {
+        self.line_style(LineStyle::Dotted { spacing, width })
+    }
+
+    /// Set dashed line style with given dash length and default width.
     pub fn line_dashed(self, length: f32) -> Self {
-        self.line_style(LineStyle::Dashed { length })
+        self.line_style(LineStyle::Dashed { length, width: 1.0 })
+    }
+
+    /// Set dashed line style with given dash length and custom width.
+    pub fn line_dashed_width(self, length: f32, width: f32) -> Self {
+        self.line_style(LineStyle::Dashed { length, width })
     }
 
     pub(super) fn validate(&self) -> Result<(), SeriesError> {

@@ -27,8 +27,8 @@ fn new() -> PlotWidget {
         })
         .collect();
 
-    let s1 = Series::line_only(positions, LineStyle::Solid)
-        .with_label("sine_line_only")
+    let s1 = Series::line_only(positions, LineStyle::Solid { width: 1.0 })
+        .with_label("sine_line_only (1px)")
         .with_color(Color::from_rgb(0.3, 0.3, 0.9));
 
     let positions = (0..50)
@@ -52,10 +52,34 @@ fn new() -> PlotWidget {
     let s3 = Series::new(
         positions,
         MarkerStyle::square(4.0),
-        LineStyle::Dashed { length: 10.0 },
+        LineStyle::Dashed { length: 10.0, width: 2.0 },
     )
-    .with_label("both_markers_and_lines")
+    .with_label("both_markers_and_lines (2px dashed)")
     .with_color(Color::from_rgb(0.3, 0.9, 0.3));
+
+    // Add a thick solid line to demonstrate width
+    let positions = (0..60)
+        .map(|i| {
+            let x = i as f64 * 0.15;
+            let y = (x * 0.6).sin() + 0.8;
+            [x, y]
+        })
+        .collect();
+    let s4 = Series::line_only(positions, LineStyle::Solid { width: 3.0 })
+        .with_label("thick_line (3px)")
+        .with_color(Color::from_rgb(0.9, 0.5, 0.1));
+
+    // Add a dotted line with custom width
+    let positions = (0..40)
+        .map(|i| {
+            let x = i as f64 * 0.25;
+            let y = (x * 0.4).cos() - 0.8;
+            [x, y]
+        })
+        .collect();
+    let s5 = Series::line_only(positions, LineStyle::Dotted { spacing: 8.0, width: 2.5 })
+        .with_label("dotted_line (2.5px)")
+        .with_color(Color::from_rgb(0.7, 0.2, 0.9));
 
     PlotWidgetBuilder::new()
         .with_tooltips(true)
@@ -68,11 +92,15 @@ fn new() -> PlotWidget {
         .add_series(s1)
         .add_series(s2)
         .add_series(s3)
+        .add_series(s4)
+        .add_series(s5)
         .with_cursor_overlay(true)
         .with_cursor_provider(|x, y| format!("Your cursor is at: X: {x:.2}, Y: {y:.2}"))
-        .with_y_label("should wrap on word level if too long")
-        .with_x_label("an x axis label")
+        .with_y_label("Y Axis (Custom Font Size)")
+        .with_x_label("X Axis (Custom Font Size)")
         .with_x_tick_formatter(|tick| format!("{:.1}s", tick.value))
+        .with_tick_label_size(12.0)
+        .with_axis_label_size(18.0)
         .with_crosshairs(true)
         .build()
         .unwrap()
