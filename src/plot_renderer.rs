@@ -76,6 +76,8 @@ struct VersionTracker {
     markers: u64,
     lines: u64,
     render_offset: glam::DVec2,
+    bounds_size: (f32, f32),
+    camera_extents: glam::DVec2,
 }
 
 impl VersionTracker {
@@ -84,6 +86,8 @@ impl VersionTracker {
             markers: 0,
             lines: 0,
             render_offset: glam::DVec2::ZERO,
+            bounds_size: (0.0, 0.0),
+            camera_extents: glam::DVec2::ZERO,
         }
     }
 }
@@ -278,11 +282,18 @@ impl PlotRenderer {
         // since positions are stored relative to render_offset
         let offset_changed = self.versions.render_offset != state.camera.render_offset;
 
+        // Check if viewport size changed - affects line width calculations
+        let current_bounds_size = (state.bounds.width, state.bounds.height);
+        let bounds_changed = self.versions.bounds_size != current_bounds_size;
+
+        // Check if camera extents changed - affects pixel-to-world conversion for line widths
+        let extents_changed = self.versions.camera_extents != state.camera.half_extents;
+
         if state.markers_version != self.versions.markers || offset_changed {
             self.rebuild_markers(device, queue, state);
             self.versions.markers = state.markers_version;
         }
-        if state.lines_version != self.versions.lines || offset_changed {
+        if state.lines_version != self.versions.lines || offset_changed || bounds_changed || extents_changed {
             self.rebuild_lines(device, queue, state);
             self.versions.lines = state.lines_version;
         }
@@ -290,8 +301,10 @@ impl PlotRenderer {
         // Rebuild reference lines whenever camera changes
         self.rebuild_reflines(device, queue, state);
 
-        // Update cached render offset
+        // Update cached render offset, bounds size, and camera extents
         self.versions.render_offset = state.camera.render_offset;
+        self.versions.bounds_size = current_bounds_size;
+        self.versions.camera_extents = state.camera.half_extents;
 
         // Selection is rebuilt whenever it's active.
         self.rebuild_selection(device, queue, state);
@@ -718,7 +731,9 @@ impl PlotRenderer {
 
         // Calculate world units per pixel for width conversion
         let viewport_width = state.bounds.width.max(1.0);
+        let viewport_height = state.bounds.height.max(1.0);
         let pixel_to_world_x = (2.0 * state.camera.half_extents.x as f32) / viewport_width;
+        let pixel_to_world_y = (2.0 * state.camera.half_extents.y as f32) / viewport_height;
 
         let mut writer = VertexWriter::new();
         let mut segs: Vec<LineSegment> = Vec::new();
@@ -738,40 +753,47 @@ impl PlotRenderer {
                 let p0 = &points_slice[i];
                 let p1 = &points_slice[i + 1];
 
-                // Calculate direction vector
-                let dx = (p1.position[0] - p0.position[0]) as f32;
-                let dy = (p1.position[1] - p0.position[1]) as f32;
-                let segment_len = (dx * dx + dy * dy).sqrt();
+                // Calculate direction vector in world space
+                let dx_world = (p1.position[0] - p0.position[0]) as f32;
+                let dy_world = (p1.position[1] - p0.position[1]) as f32;
 
-                if segment_len < 1e-6 {
+                // Convert to screen space for normalization
+                let dx_screen = dx_world / pixel_to_world_x;
+                let dy_screen = dy_world / pixel_to_world_y;
+                let segment_len_screen = (dx_screen * dx_screen + dy_screen * dy_screen).sqrt();
+
+                if segment_len_screen < 1e-6 {
                     continue; // Skip degenerate segments
                 }
 
-                // Normalize direction and calculate perpendicular (rotate 90 degrees)
-                let dir_x = dx / segment_len;
-                let dir_y = dy / segment_len;
-                let perp_x = -dir_y;
-                let perp_y = dir_x;
+                // Normalize in screen space
+                let dir_x_screen = dx_screen / segment_len_screen;
+                let dir_y_screen = dy_screen / segment_len_screen;
 
-                // Convert width from logical pixels to world coordinates
-                let width_world = width * pixel_to_world_x;
-                let half_width = width_world * 0.5;
+                // Perpendicular in screen space (rotate 90 degrees)
+                let perp_x_screen = -dir_y_screen;
+                let perp_y_screen = dir_x_screen;
+
+                // Convert half-width offset to world space
+                let half_width_px = width * 0.5;
+                let offset_x_world = perp_x_screen * half_width_px * pixel_to_world_x;
+                let offset_y_world = perp_y_screen * half_width_px * pixel_to_world_y;
 
                 // Offset corners in world space before rendering
                 let p0_world = p0.position;
                 let p1_world = p1.position;
 
-                let corner0 = [p0_world[0] - perp_x as f64 * half_width as f64,
-                               p0_world[1] - perp_y as f64 * half_width as f64];
-                let corner1 = [p0_world[0] + perp_x as f64 * half_width as f64,
-                               p0_world[1] + perp_y as f64 * half_width as f64];
-                let corner2 = [p1_world[0] - perp_x as f64 * half_width as f64,
-                               p1_world[1] - perp_y as f64 * half_width as f64];
-                let corner3 = [p1_world[0] + perp_x as f64 * half_width as f64,
-                               p1_world[1] + perp_y as f64 * half_width as f64];
+                let corner0 = [p0_world[0] - offset_x_world as f64,
+                               p0_world[1] - offset_y_world as f64];
+                let corner1 = [p0_world[0] + offset_x_world as f64,
+                               p0_world[1] + offset_y_world as f64];
+                let corner2 = [p1_world[0] - offset_x_world as f64,
+                               p1_world[1] - offset_y_world as f64];
+                let corner3 = [p1_world[0] + offset_x_world as f64,
+                               p1_world[1] + offset_y_world as f64];
 
                 let dist0 = cumulative_distance;
-                cumulative_distance += segment_len;
+                cumulative_distance += segment_len_screen;
                 let dist1 = cumulative_distance;
 
                 // Generate two triangles (6 vertices) for the quad
@@ -866,7 +888,9 @@ impl PlotRenderer {
 
         // Calculate world units per pixel for width conversion
         let viewport_width = state.bounds.width.max(1.0);
+        let viewport_height = state.bounds.height.max(1.0);
         let pixel_to_world_x = (2.0 * state.camera.half_extents.x as f32) / viewport_width;
+        let pixel_to_world_y = (2.0 * state.camera.half_extents.y as f32) / viewport_height;
 
         let mut writer = VertexWriter::new();
         let mut segs: Vec<LineSegment> = Vec::new();
@@ -889,6 +913,7 @@ impl PlotRenderer {
             let (line_style_u32, style_param, _) = line_style_params(vline.line_style);
 
             // Convert width from logical pixels to world coordinates
+            // Vertical line: perpendicular is horizontal (±x direction)
             let width_world = vline.width * pixel_to_world_x;
             let half_width = width_world * 0.5;
 
@@ -974,7 +999,8 @@ impl PlotRenderer {
             let (line_style_u32, style_param, _) = line_style_params(hline.line_style);
 
             // Convert width from logical pixels to world coordinates
-            let width_world = hline.width * pixel_to_world_x;
+            // Horizontal line: perpendicular is vertical (±y direction)
+            let width_world = hline.width * pixel_to_world_y;
             let half_width = width_world * 0.5;
 
             // Create quad for horizontal line
