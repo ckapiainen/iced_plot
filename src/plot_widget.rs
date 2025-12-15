@@ -864,24 +864,25 @@ pub struct PlotRendererState {
     format: TextureFormat,
 }
 
-impl shader::Primitive for Primitive {
-    type Renderer = PlotRendererState;
-
-    fn initialize(
-        &self,
+impl shader::Pipeline for PlotRendererState {
+    fn new(
         _device: &iced::wgpu::Device,
         _queue: &iced::wgpu::Queue,
         format: iced::wgpu::TextureFormat,
-    ) -> Self::Renderer {
+    ) -> Self {
         PlotRendererState {
             renderers: HashMap::new(),
             format,
         }
     }
+}
+
+impl shader::Primitive for Primitive {
+    type Pipeline = PlotRendererState;
 
     fn prepare(
         &self,
-        renderer_state: &mut Self::Renderer,
+        renderer_state: &mut Self::Pipeline,
         device: &iced::wgpu::Device,
         queue: &iced::wgpu::Queue,
         bounds: &Rectangle,
@@ -899,7 +900,7 @@ impl shader::Primitive for Primitive {
 
     fn render(
         &self,
-        renderer_state: &Self::Renderer,
+        renderer_state: &Self::Pipeline,
         encoder: &mut iced::wgpu::CommandEncoder,
         target: &iced::wgpu::TextureView,
         clip_bounds: &Rectangle<u32>,

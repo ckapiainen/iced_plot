@@ -12,7 +12,7 @@ use std::{
     sync::{Mutex, OnceLock},
 };
 
-use iced::wgpu::*;
+use iced::wgpu::{self, *};
 
 use crate::{Point, plot_state::SeriesSpan};
 
@@ -251,7 +251,10 @@ impl PickingPass {
             let _ = tx.send(res);
         });
         // Drive completion for this tiny buffer
-        let _ = device.poll(PollType::Wait);
+        let _ = device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: Some(std::time::Duration::from_secs(5)),
+        });
         let _ = rx.recv();
         let data = slice.get_mapped_range();
         // Scan for nearest non-zero, by squared distance in pixel space
